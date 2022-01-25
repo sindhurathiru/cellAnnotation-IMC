@@ -9,14 +9,10 @@ from tensorflow.keras.layers import Input, Dense, Conv1D, MaxPooling1D, UpSampli
 from tensorflow.keras.layers import Conv2D, MaxPooling2D
 from tensorflow.keras import backend as K
 from tensorflow.keras.models import Model, load_model
-import phenograph
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 import statistics
 import SimpleITK as sitk
 from myshow import myshow
 from scipy.stats import norm
-from PIL import Image
 import os 
 import glob
 from keras import models
