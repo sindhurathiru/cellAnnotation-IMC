@@ -135,22 +135,6 @@ def dataLoad(rawData):
 
   return rawData
 
-def trainTestSplit(rawData):
-  labelData = rawData["Cell Type"]
-  x_trainDf, x_testDf, y_train, y_test = train_test_split(rawData, labelData, test_size=0.33, random_state=42, stratify=labelData)
-  x_trainDf = x_trainDf.drop(["ROI", "Cell Type", "CYSvTUR", "Patient", "Cell Label"],1)
-  # Balance datasets
-  x_trainDf, y_train = SMOTE().fit_resample(x_trainDf, y_train)
-  # Make validation set
-  x_trainDf, x_validDf, y_train, y_valid = train_test_split(x_trainDf, y_train, test_size=0.2, random_state=42, stratify=y_train)
-  # Convert to arrays
-  x_train = np.asarray(x_trainDf).reshape(x_trainDf.shape[0], x_trainDf.shape[1], 1)
-  x_test = x_testDf.drop(["ROI", "Cell Type", "CYSvTUR", "Patient", "Cell Label"],1)
-  x_test = np.asarray(x_test).reshape(x_test.shape[0], x_test.shape[1], 1)
-  x_valid = np.asarray(x_validDf).reshape(x_validDf.shape[0], x_validDf.shape[1], 1)
-  
-  return x_trainDf, x_testDf, x_validDf, x_train, x_test, x_valid, y_train, y_test, y_valid
-
 def cellCounts(data):
   cellts = le.inverse_transform(data["Cell Type"])
   unique, counts = np.unique(cellts, return_counts=True)
@@ -158,51 +142,105 @@ def cellCounts(data):
   return cellcounts
 
 def convaeClassifier(x_train, x_test, x_valid, y_train, y_test, y_valid):
-  import tensorflow.compat.v1 as tf
-  tf.disable_v2_behavior() 
-  
+  """
+  Runs data through convolutional autoencoder 20 times and records performance for each run
+  """
   from tensorflow.keras.callbacks import EarlyStopping
+  from imblearn.over_sampling import SMOTE
 
+  labelData = rawData["Cell Type"]
   adam = tf.keras.optimizers.Adam(learning_rate=0.00005)
   adamLow = tf.keras.optimizers.Adam(learning_rate=0.00001)
-  bottleneck_size = 5 # number of dimensions to view latent space in; same as "code size"
-  nFeatures = x_train.shape[1]
-  input_ae = Input(shape=(nFeatures, 1))
+  early_stopping = EarlyStopping(patience=10)
+  cnnDf = pd.DataFrame()
 
-  model = None
+  for i in range(0, 20):
+      x_trainDf, x_testDf, y_train, y_test = train_test_split(rawData, labelData, test_size=0.33, random_state=i, stratify=labelData)
+      x_trainDf = x_trainDf.drop(["ROI", "Cell Type", "CYSvTUR", "Patient", "Cell Label"],1)
+      # Balance datasets
+      x_trainDf, y_train = SMOTE().fit_resample(x_trainDf, y_train)
+      # Make validation set
+      x_trainDf, x_validDf, y_train, y_valid = train_test_split(x_trainDf, y_train, test_size=0.2, random_state=i, stratify=y_train)
+      # Convert to arrays
+      x_train = np.asarray(x_trainDf).reshape(x_trainDf.shape[0], x_trainDf.shape[1], 1)
+      x_test = x_testDf.drop(["ROI", "Cell Type", "CYSvTUR", "Patient", "Cell Label"],1)
+      x_test = np.asarray(x_test).reshape(x_test.shape[0], x_test.shape[1], 1)
+      x_valid = np.asarray(x_validDf).reshape(x_validDf.shape[0], x_validDf.shape[1], 1)
 
-  x = Conv1D(16, 3, activation="relu", padding="same")(input_ae)
-  x = Conv1D(16, 3, activation="relu", padding="same")(x)
-  x = MaxPooling1D()(x)
-  x = Conv1D(32, 3, activation="relu", padding="same")(x)
-  x = Conv1D(32, 3, activation="relu", padding="same")(x)
-  x = Dropout(0.7)(x)
-  encoded = MaxPooling1D()(x)
+      nFeatures = x_train.shape[1]
+      model = None
+      input_ae = Input(shape=(nFeatures, 1))
 
-  x = Conv1D(32, 3, activation="relu", padding="same")(x)
-  x = Conv1D(32, 3, activation="relu", padding="same")(x)
-  x = UpSampling1D()(x)
-  x = Conv1D(16, 3, activation="relu", padding="same")(x)
-  x = Conv1D(16, 3, activation="relu", padding="same")(x)
-  decoded = Conv1D(1, 3, activation='sigmoid', padding='same', name='ae_out')(x)
+      x = Conv1D(16, 3, activation="relu", padding="same")(input_ae)
+      x = Conv1D(16, 3, activation="relu", padding="same")(x)
+      x = MaxPooling1D()(x)
+      x = Conv1D(32, 3, activation="relu", padding="same")(x)
+      x = Conv1D(32, 3, activation="relu", padding="same")(x)
+      x = Dropout(0.7)(x)
+      encoded = MaxPooling1D()(x)
+      x = Conv1D(32, 3, activation="relu", padding="same")(encoded)
+      x = Conv1D(32, 3, activation="relu", padding="same")(x)
+      x = UpSampling1D()(x)
+      x = Conv1D(16, 3, activation="relu", padding="same")(x)
+      x = Conv1D(16, 3, activation="relu", padding="same")(x)
+      x = UpSampling1D()(x)
+      decoded = Conv1D(1, 3, activation='sigmoid', padding='same', name='ae_out')(x)
 
-  y = Flatten()(encoded)
-  y = Dense(64, activation = 'relu')(y)
-  y = Dense(24, activation = 'relu')(y)
-  output_class = Dense(nClasses, activation = 'softmax', name = "class_out")(y)
+      y = Flatten()(encoded)
+      y = Dense(64, activation = 'relu')(y)
+      y = Dense(24, activation = 'relu')(y)
+      output_class = Dense(4, activation = 'softmax', name = "class_out")(y)
 
-  ae_alone = Model(input_ae, decoded)
-  ae_joint = Model(inputs=[input_ae], outputs=[decoded, output_class])
-  ae_alone.compile(optimizer=adamLow, loss='mean_squared_error', metrics=['mse'])
+      ae_alone = Model(input_ae, decoded)
+      ae_joint = Model(inputs=[input_ae], outputs=[decoded, output_class])
+
+      ae_alone.compile(optimizer=adamLow, loss='mean_squared_error', metrics=['mse'])
+      history_alone = ae_alone.fit(x_train, x_train, validation_data=(x_valid,x_valid), 
+                                        epochs=20, batch_size=256, shuffle=1, verbose=2)
+
+      ae_joint.compile(optimizer=adam,
+                      loss={'ae_out':'mean_squared_error','class_out':'sparse_categorical_crossentropy'},
+                      loss_weights={'ae_out':1,'class_out':10},
+                      metrics={'ae_out':'mse','class_out':'accuracy'})
+      history = ae_joint.fit([x_train],
+                                [x_train,y_train],
+                                validation_data=(x_valid,[x_valid,y_valid]), 
+                                epochs=1000, batch_size=256, shuffle=1, verbose=2,
+                                callbacks = [EarlyStopping(
+                                    monitor='val_loss', mode='min',
+                                    patience=10,restore_best_weights=True)])
+
+      ae_joint.save("C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\CNN\\Models\\convAutoModel_" + str(i))
+
+      acc = ae_joint.evaluate(x_test, [x_test, y_test])
+      predicted_classes = ae_joint.predict(x_test)
+      predicted_classes = np.argmax(np.round(predicted_classes[1]),axis=1)
+      pred_y_labelled = le.inverse_transform(predicted_classes)
+
+      accDict = {}
+      accDict["Seed"] = i
+      accDict["Epochs"] = len(history.history["loss"])
+      accDict["Train Accuracy"] = history.history["class_out_acc"][-1]
+      accDict["Train Loss"] = history.history["class_out_loss"][-1]
+      accDict["Val Accuracy"] = history.history["val_class_out_acc"][-1]
+      accDict["Val Loss"] = history.history["val_class_out_loss"][-1]
+      accDict["Test Accuracy"] = acc[4]
+      accDict["Test Loss"] = acc[2]
+      accDict["Predictions"] = pred_y_labelled
+
+      cnnDf = cnnDf.append(accDict, ignore_index=True)
+
+      cnnDf.to_csv("C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\CNN\\convAutoRunsResults.csv")
+
+  return cnnDf
   
-
-
+  
+  
 def main():
   rawData = pd.read_csv("C:\\Users\\sindhura\\OneDrive - Queen's University\\Queens\\Research MSc\\Bladder Data\\newPhenographData.csv")
   rawData = dataLoad(rawData)
   nClasses = len(np.unique(rawData["Cell Type"]))
-  x_trainDf, x_testDf, x_validDf, x_train, x_test, x_valid, y_train, y_test, y_valid = trainTestSplit(rawData)
-  
+  modelData = convaeClassifier(rawData)
   
   
 
